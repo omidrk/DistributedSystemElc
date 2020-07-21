@@ -104,7 +104,7 @@ public class Clients extends AbstractActor{
 //start send massage to self to satrting write process
     public void writeValueStart(){
 
-        clientwriteRequest onStartwrite = new clientwriteRequest(10);
+        clientwriteRequest onStartwrite = new clientwriteRequest(10,getSelf(),this.MyNode);
         getContext().system().scheduler().scheduleOnce(Duration.create(5, TimeUnit.SECONDS), 
             getSelf(), 
             onStartwrite, 
@@ -134,8 +134,8 @@ public class Clients extends AbstractActor{
     public void onStartwrite(clientwriteRequest msg){
         int value = rnd.nextInt(1000);
         int interval = rnd.nextInt(10)+5;
-        clientwriteRequest onClientwriteReq = new clientwriteRequest(value);
-        getContext().system().scheduler().scheduleWithFixedDelay(Duration.create(1, TimeUnit.SECONDS), 
+        clientwriteRequest onClientwriteReq = new clientwriteRequest(value,getSelf(),this.MyNode);
+        getContext().system().scheduler().scheduleOnce(
             Duration.create(interval, TimeUnit.SECONDS), 
             this.MyNode, 
             onClientwriteReq, 

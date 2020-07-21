@@ -35,6 +35,50 @@ public class DistributedSystemElc {
   final static int VOTE_TIMEOUT = 1000;      // timeout for the votes, ms
 
   // Massages 
+
+  ///////////////new data structure ++++++++++++++
+
+  public static class coordinatorVoteReq2 implements Serializable {
+    final int value;          // value of the message to write
+    final int epoch;       // epoch in which the message belongs
+    final int seqNumber;   // sequence number of the message
+    final ActorRef client;
+    final ActorRef node;
+      public coordinatorVoteReq2(int v,int e,int seq,ActorRef cl,ActorRef nd){
+        this.value = v;
+        this.epoch = e;
+        this.seqNumber = seq;
+        this.client = cl;
+        this.node = nd;
+        }
+    }
+
+    public static class coordinatorVoteRes2 implements Serializable {
+      final int seqNumber;   // sequence number of the message
+        public coordinatorVoteRes2(int seq){
+          this.seqNumber = seq;
+          }
+      }
+
+    //commit from coordinator
+
+    public static class coordinatorCommitRes2 implements Serializable {
+      final int seqNumber;   // sequence number of the message
+      public coordinatorCommitRes2(int seq){
+        this.seqNumber = seq;
+        }
+      }
+
+  //for timeout
+  public static class Timeout implements Serializable {
+    public final int epoch;
+    public final int seq;
+    public Timeout (int e,int s){
+      this.epoch = e;
+      this.seq = s;
+    }
+
+  }
   // Start message that sends the list of participants to everyone
   public static class StartMessage implements Serializable {
     
@@ -77,8 +121,12 @@ public class DistributedSystemElc {
   //massage to write a value on node
   public static class clientwriteRequest implements Serializable {
     final int value;          // value of the message to write
-    public clientwriteRequest(int v){
+    final ActorRef client;
+    final ActorRef node;
+    public clientwriteRequest(int v,ActorRef cl,ActorRef nd){
       this.value = v;
+      this.client = cl;
+      this.node = nd;
     }
    }
 
@@ -87,13 +135,94 @@ public class DistributedSystemElc {
     final int value;          // value of the message to write
     final int epoch;       // epoch in which the message belongs
     final int seqNumber;   // sequence number of the message
-    public clientwriteResponse(int v,int e,int seq){
-      this.value = v;
-      this.epoch = e;
-      this.seqNumber = seq;
+    final ActorRef client;
+    final ActorRef node;
+      public clientwriteResponse(int v,int e,int seq,ActorRef cl,ActorRef nd){
+        this.value = v;
+        this.epoch = e;
+        this.seqNumber = seq;
+        this.client = cl;
+        this.node = nd;
+        }
     }
-   }
 
+
+    public static class nodewriteRequest implements Serializable {
+      final int value;          // value of the message to write
+      final ActorRef client;
+      final ActorRef node;
+      public nodewriteRequest(int v,ActorRef cl,ActorRef nd){
+        this.value = v;
+        this.client = cl;
+        this.node = nd;
+      }
+     }
+  
+     //response to write request from node to client
+     public static class nodewriteResponse implements Serializable {
+      final int value;          // value of the message to write
+      final int epoch;       // epoch in which the message belongs
+      final int seqNumber;   // sequence number of the message
+      final ActorRef client;
+      final ActorRef node;
+        public nodewriteResponse(int v,int e,int seq,ActorRef cl,ActorRef nd){
+          this.value = v;
+          this.epoch = e;
+          this.seqNumber = seq;
+          this.client = cl;
+          this.node = nd;
+          }
+      }
+
+   //Voting start here
+   //
+
+   public static class coordinatorVoteReq implements Serializable {
+    final int value;          // value of the message to write
+    final int epoch;       // epoch in which the message belongs
+    final int seqNumber;   // sequence number of the message
+    final ActorRef client;
+    final ActorRef node;
+      public coordinatorVoteReq(int v,int e,int seq,ActorRef cl,ActorRef nd){
+        this.value = v;
+        this.epoch = e;
+        this.seqNumber = seq;
+        this.client = cl;
+        this.node = nd;
+        }
+    }
+
+    public static class coordinatorVoteRes implements Serializable {
+      final int value;          // value of the message to write
+      final int epoch;       // epoch in which the message belongs
+      final int seqNumber;   // sequence number of the message
+      final ActorRef client;
+      final ActorRef node;
+        public coordinatorVoteRes(int v,int e,int seq,ActorRef cl,ActorRef nd){
+          this.value = v;
+          this.epoch = e;
+          this.seqNumber = seq;
+          this.client = cl;
+          this.node = nd;
+          }
+      }
+
+    //commit from coordinator
+
+    public static class coordinatorCommitRes implements Serializable {
+      final int value;          // value of the message to write
+      final int epoch;       // epoch in which the message belongs
+      final int seqNumber;   // sequence number of the message
+      final ActorRef client;
+      final ActorRef node;
+        public coordinatorCommitRes(int v,int e,int seq,ActorRef cl,ActorRef nd){
+          this.value = v;
+          this.epoch = e;
+          this.seqNumber = seq;
+          this.client = cl;
+          this.node = nd;
+          }
+      }
 
 
   
@@ -108,6 +237,7 @@ public class DistributedSystemElc {
     for (int i=1; i <= N_PARTICIPANTS; i++) {
       participants.add(system.actorOf(Node.props(i, InitValue, epochValue, InitSeqNumber,false) ,"participant" + i));
     }
+
 
     // Create Clients
     List<ActorRef> Clientss = new ArrayList<>();
@@ -124,7 +254,6 @@ public class DistributedSystemElc {
     for (ActorRef i : participants){
       Nodes.add(i);
     }
-    System.out.println(Nodes);
 
     //Sent Init massage
     StartMessage onStartMessage = new StartMessage(Nodes, participants, coordinator);
