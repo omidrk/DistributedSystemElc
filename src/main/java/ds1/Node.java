@@ -39,6 +39,8 @@ public class Node extends AbstractActor {
     protected List<ActorRef> Clients;           //list of Clients
     protected ActorRef Coordinator;             // coordinator
 
+    protected Boolean Ping;                     //toHeartBeat check
+
     protected Set<coordinatorVoteReq> VoteReq;// for concurrent write req
     protected Set<clientwriteResponse> finalizedMsg;// finished voted massages
 
@@ -71,6 +73,7 @@ public class Node extends AbstractActor {
         this.Value = 1000;
         this.epoch = 0;
         this.SeqNumber = 0;
+        this.Ping = false;
         this.VoteReq = new HashSet<>();
         this.finalizedMsg = new HashSet<>();
 
@@ -98,17 +101,6 @@ public class Node extends AbstractActor {
         .match(StartMessage.class, this::onStartMessage)
         .build();
     }
-
-
-    // //general receive builder for both coordinator and participants
-    // @Override
-    // public Receive createReceive() {
-    //     return receiveBuilder()
-    //     .match(StartMessage.class, this::onStartMessage)
-    //     .match(clientReadRequest.class, this::onClientReadReq)
-    //     .match(clientwriteRequest.class, this::onClientWriteReq)
-    //     .build();
-    // }
 
     ///////////////////////////////// General node behaviors \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
@@ -174,7 +166,16 @@ public class Node extends AbstractActor {
             getContext().system().dispatcher(), getSelf()
             );
             break;
-        case "b":
+        case "pingpong":
+          getContext().system().scheduler().scheduleOnce(
+            Duration.create(time, TimeUnit.MILLISECONDS),  
+            getSelf(),
+            new PongFail(), // the message to send
+            getContext().system().dispatcher(), getSelf()
+            );
+            break;
+        case "c":
+
 
       }
      
@@ -185,10 +186,24 @@ public class Node extends AbstractActor {
         setGroup(msg);
         if(this.isManager){
             getContext().become(createReceiveCoordinator());
+            
         } else {
           getContext().become(createReceiveparticipants());
+          startHeartBeat();
         }
         
+        }
+
+        ///after starting node they will start asking coordinator every 4200 sec to see if it is alive
+        public void startHeartBeat(){
+            getContext().system().scheduler().scheduleWithFixedDelay(
+            Duration.create(200, TimeUnit.MILLISECONDS),  
+            Duration.create(4000, TimeUnit.MILLISECONDS),  
+            getSelf(),
+            new PingPongStartMassage(), // the message to send
+            getContext().system().dispatcher(),
+            getSelf()
+            );
         }
   
 
@@ -200,6 +215,7 @@ public class Node extends AbstractActor {
         .match(nodewriteRequest.class, this::onWriteReqFromNode)
         .match(coordinatorVoteRes2.class, this::onVoteRes)
         .match(Timeout.class, this::onTimeout)
+        .match(Ping.class, this::onPing)
         .build();
     }
 
@@ -234,29 +250,6 @@ public class Node extends AbstractActor {
       print("voting started on coordinator with proposed value: "+msg.value);
       setTimeout(1000, "voteRes",this.epoch, this.SeqNumber);
 
-
-
-      // ActorRef sendersss = msg.node;
-      // this.voters.clear();
-      // if(!this.voters.isEmpty()){
-        
-      // }
-      // this.voters.add(getSelf());
-      // print("fis");
-      // EpochSeqPair.put(this.SeqNumber, this.epoch);
-      // EpochSeqMassage.put(key, value)
-      // this.SeqVoters.put(this.SeqNumber, this.voters);
-      // coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msg.value, this.epoch, this.SeqNumber, msg.client, msg.node);
-      // this.VoteReq.add(onVoteReqp);
-      // this.workingMsg.put(this.SeqNumber,onVoteReqp);
-      // this.participants.get(3).tell(onVoteReqp, getSelf());
-      // multicast(onVoteReqp);
-      // print("massage sent to nodes");
-      // setTimeout(1000, "voteRes",this.epoch, this.SeqNumber);
-
-      // print("sent vote req: "+sendersss+" and value: "+msg.value);
-      // Coordinator.tell(msg, getSelf());
-
     }
 
     //collect all yes voted
@@ -281,24 +274,14 @@ public class Node extends AbstractActor {
         //send back the reply to first node who sent the initial writing req
         coordToclientRes.node.tell(coordToclientRes, getSelf());
 
-
-
-        // clientwriteResponse coordToclientRes = new clientwriteResponse(this.workingMsg.get(msg.seq).value,
-        // this.workingMsg.get(msg.seq).epoch,
-        // this.workingMsg.get(msg.seq).seqNumber,
-        // this.workingMsg.get(msg.seq).client,
-        // this.workingMsg.get(msg.seq).node
-        // );
-
-        // this.finalizedMsg.add(coordToclientRes);
-        // this.workingMsg.remove(msg.seq);
-        // this.SeqVoters.remove(msg.seq);
-        // this.SeqNumber +=1;
-        
-
       }
       
     }
+
+    public void onPing(Ping msg){
+      getSender().tell(new Pong(), getSelf());
+    }
+
 
     
 
@@ -317,9 +300,14 @@ public class Node extends AbstractActor {
 
            .match(coordinatorVoteReq.class, this::onVoteReqp)
            .match(coordinatorCommitRes2.class, this::oncommitcoord)
-           .match(clientwriteResponse.class, this::onFinishedResponse)
+           .match(clientwriteResponse.class, this::onFinishedResponses)
 
-           .match(Timeout.class, this::onTimeouts)                    
+           .match(Timeout.class, this::onTimeouts)
+           .match(PingPongStartMassage.class, this::onPingPongInit)
+           .match(Pong.class, this::onPong)
+           .match(PongFail.class, this::onPongFail)
+
+
            .build();
       }
 
@@ -380,21 +368,32 @@ public class Node extends AbstractActor {
       print("start election");
     }
 
+    //coordinator will send this after 4200 milisec if not received election will hold
+    public
+
     //receive final massage from coordinator and send it to client
-    public void onFinishedResponse(clientwriteResponse msg){
-      msg.client.tell(msg, getSelf());
+    void onFinishedResponses (clientwriteResponse msgg) {
+      msgg.client.tell(msgg, getSelf());
     }
 
+    //This heartbeat function will send ping massage to coordinator and wait for pong
+    // if not receive in 6000 ms election will start 
+    void onPingPongInit(PingPongStartMassage msg){
+      if(!this.isManager){
+        this.Ping =false;
+        this.Coordinator.tell(new Ping(), getSelf());
+        setTimeout(6000, "pingpong", 0, 0);
+      }
+    }
+    public void onPong(Pong msg){
+      this.Ping = true;
+      print("server alive");
+    }
+    void onPongFail(PongFail msg){
+      if(!this.Ping){
+        print("ping failed start election");
+      }
+    }
 
-    //wait for the reply of coordinator and store it in a set then increase seq number 
-    //and send it to client
-    // public void onCoordinatorWriteRes(clientwriteResponse onClientWriteRes){
-    //   writeReq.add(onClientWriteRes);
-    //   SeqNumber += 1;
-    //   if(SeqNumber != onClientWriteRes.seqNumber){
-    //     print("something is missing in responses to nodes; Seq number is not right :(");
-    //   }
-    //   onClientWriteRes.client.tell(onClientWriteRes, getSelf());
-    // }
-    
+ 
 }

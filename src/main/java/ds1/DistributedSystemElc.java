@@ -225,6 +225,19 @@ public class DistributedSystemElc {
       }
 
 
+    //to start heartbeat
+    public static class Ping implements Serializable { }
+    public static class Pong implements Serializable { }
+    public static class PongFail implements Serializable { }
+
+    public static class PingPongStartMassage implements Serializable { }
+
+
+
+
+
+
+
   
   /*-- Main ------------------------------------------------------------------*/
   public static void main(String[] args) {
