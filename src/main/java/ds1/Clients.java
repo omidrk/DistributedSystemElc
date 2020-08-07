@@ -37,11 +37,24 @@ public class Clients extends AbstractActor{
     protected int epoch;
     protected int SeqNumber;
     private Random rnd = new Random();
+    protected List<Integer> intervalss;
 
     public Clients(int id){
         this.id = id;
+        this.intervalss = new ArrayList<>();
+        this.intervalss.add(5);
+        this.intervalss.add(13);
+        this.intervalss.add(19);
+        this.intervalss.add(27);
+        this.intervalss.add(33);
+        this.intervalss.add(41);
+        this.intervalss.add(52);
+
+
+
+
         //Send massage to self to start process
-        readValueStart();
+        // readValueStart();
         writeValueStart();
 
     }
@@ -119,7 +132,7 @@ public class Clients extends AbstractActor{
 
     public void onStartRead(clientReadRequest msg){
 
-        int interval = rnd.nextInt(10)+5;
+        int interval = rnd.nextInt(30)+5;
         clientReadRequest onClientReadReq = new clientReadRequest();
         getContext().system().scheduler().scheduleWithFixedDelay(Duration.create(1, TimeUnit.SECONDS), 
             Duration.create(interval, TimeUnit.SECONDS), 
@@ -132,11 +145,15 @@ public class Clients extends AbstractActor{
 
     //receive write req from self to start th whole process and send write req to the node
     public void onStartwrite(clientwriteRequest msg){
-        int value = rnd.nextInt(1000);
-        int interval = rnd.nextInt(10)+5;
+        int value = rnd.nextInt(1000)+10;
+        // int interval = rnd.nextInt(30)+10;
+        int interval = this.intervalss.get(this.id);
+        print("interval is : "+interval);
+
         clientwriteRequest onClientwriteReq = new clientwriteRequest(value,getSelf(),this.MyNode);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(interval, TimeUnit.SECONDS), 
+        getContext().system().scheduler().scheduleWithFixedDelay(
+            Duration.create(interval+5, TimeUnit.SECONDS), 
+            Duration.create(interval+15, TimeUnit.SECONDS), 
             this.MyNode, 
             onClientwriteReq, 
             getContext().system().dispatcher(), 

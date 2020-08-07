@@ -8,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    implementation group: 'com.typesafe.akka', name: 'akka-actor_2.13', version: '2.6.3'
+    implementation group: 'com.typesafe.akka', name: 'akka-actor_2.13', version: '2.6.8'
 }
 
 compileJava {

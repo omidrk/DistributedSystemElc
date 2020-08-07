@@ -4,6 +4,7 @@ import akka.actor.ActorRef;
 import akka.actor.AbstractActor;
 import akka.actor.ActorSystem;
 import akka.actor.Props;
+import scala.annotation.meta.field;
 import scala.concurrent.duration.Duration;
 
 import java.io.Serializable;
@@ -24,7 +25,7 @@ import ds1.Clients;
 public class DistributedSystemElc {
   //Some initial variable
 
-  public final static int N_PARTICIPANTS = 6;
+  public final static int N_PARTICIPANTS = 8;
   public final static int N_client = 2;
 
 
@@ -52,6 +53,8 @@ public class DistributedSystemElc {
         this.node = nd;
         }
     }
+    //kill Node immidietly
+    public static class killNode implements Serializable {}
 
     public static class coordinatorVoteRes2 implements Serializable {
       final int seqNumber;   // sequence number of the message
@@ -73,9 +76,11 @@ public class DistributedSystemElc {
   public static class Timeout implements Serializable {
     public final int epoch;
     public final int seq;
-    public Timeout (int e,int s){
+    public final String mode;
+    public Timeout (int e,int s,String m){
       this.epoch = e;
       this.seq = s;
+      this.mode = m;
     }
 
   }
@@ -87,6 +92,20 @@ public class DistributedSystemElc {
     public final ActorRef coordinator;     //initial coordinator
 
     public StartMessage(List<ActorRef> Nodes,List<ActorRef> participants,ActorRef coordinator) {
+      this.Nodes = Collections.unmodifiableList(new ArrayList<>(Nodes));
+      this.participants = Collections.unmodifiableList(new ArrayList<>(participants));
+      this.coordinator = coordinator;
+    }
+  }
+
+  // Start message that sends the list of participants to everyone
+  public static class postElection implements Serializable {
+    
+    public final List<ActorRef> Nodes;      //list on all nodes
+    public final List<ActorRef> participants;   //list of participants
+    public final ActorRef coordinator;     //initial coordinator
+
+    public postElection(List<ActorRef> Nodes,List<ActorRef> participants,ActorRef coordinator) {
       this.Nodes = Collections.unmodifiableList(new ArrayList<>(Nodes));
       this.participants = Collections.unmodifiableList(new ArrayList<>(participants));
       this.coordinator = coordinator;
@@ -231,6 +250,42 @@ public class DistributedSystemElc {
     public static class PongFail implements Serializable { }
 
     public static class PingPongStartMassage implements Serializable { }
+
+    //starting election
+
+
+    public static class insideNode implements Serializable {
+      final int value;          // value of the message to write
+      final int epoch;       // epoch in which the message belongs
+      final int seqNumber;   // sequence number of the message
+      final ActorRef node;
+      final int id;
+      public insideNode(int v,int e,int seq,ActorRef nd,int id){
+        this.value = v;
+        this.epoch = e;
+        this.seqNumber = seq;
+        this.node = nd;
+        this.id = id;
+        }
+
+        int getSeq(){
+          return this.seqNumber;
+        }
+        int getID(){
+          return this.id;
+        }
+     }
+     public static class startElection implements Serializable {
+   
+      final List<insideNode> lastMassages = new ArrayList<>();
+      final Integer issuer;
+      public startElection(insideNode lm, Integer id){
+          this.lastMassages.add(lm);
+          this.issuer = id;
+        }
+     }
+     public static class ackElection implements Serializable {}
+
 
 
 
