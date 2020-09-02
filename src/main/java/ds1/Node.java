@@ -6,6 +6,7 @@ import akka.actor.ActorPath;
 import akka.actor.ActorSystem;
 import akka.actor.Cancellable;
 import akka.actor.Props;
+import akka.dispatch.sysmsg.Terminate;
 import ds1.DistributedSystemElc;
 import ds1.DistributedSystemElc.*;
 
@@ -100,6 +101,7 @@ public class Node extends AbstractActor {
 
     public Node(int id,int Value,int epoch, int SeqNumber,Boolean isManager){
         this.id = id;
+        this.nextNodeId = id;
         this.electionIssuer = 1000;
         this.Value = 1000;
         this.epoch = 0;
@@ -718,7 +720,7 @@ public class Node extends AbstractActor {
     public void onClientWriteReq(clientwriteRequest msg){
         ActorRef sender = getSender();
         nodewriteRequest onWriteReqFromNode = new nodewriteRequest(msg.value, msg.client, msg.node);
-        print("Im : "+getSelf()+"Write massage recieved from client : "+sender+" and value: "+msg.value);
+        print("Im : "+getSelf()+"Write massage recieved from client : "+sender+" and value: "+msg.value+". Forwarded to coordinator.");
         // System.out.println(this.Coordinator);
         this.Coordinator.tell(onWriteReqFromNode, getSelf());
     }
@@ -727,9 +729,10 @@ public class Node extends AbstractActor {
     public void onVoteReqp(coordinatorVoteReq msg){
       //add random delay for each node
       int delayTime = this.rnd.nextInt(1000)+500;
+      int randomTime = this.id*1000;
       delay(delayTime);
 
-      print("client answer is yes"+msg.seqNumber);
+      print("client vote answer is yes"+msg.seqNumber);
 
       //prepare send back the response to coordinator
       coordinatorVoteRes2 voteRes = new coordinatorVoteRes2(msg.seqNumber);
@@ -745,7 +748,7 @@ public class Node extends AbstractActor {
       //waiting for the response of the commit from coordinator
       delay(rnd.nextInt(5000)+1500);
       if(this.isElection ==false){
-        setTimeout(15000, "voteRes",msg.epoch,msg.seqNumber);
+        setTimeout(15000+randomTime, "voteRes",msg.epoch,msg.seqNumber);
       }
       
     }
@@ -832,7 +835,8 @@ public class Node extends AbstractActor {
                 this.electionMassageCache = sElb;
               }
 
-              startElection(this.id+1,this.electionMassageCache);;
+              this.nextNodeId +=1;
+              startElection(this.nextNodeId,this.electionMassageCache);;
               break;
             // }
             //break;
@@ -931,6 +935,7 @@ public class Node extends AbstractActor {
           print("another election");
           this.electionMap.put(msg.issuer, msg);
           getSender().tell(new ackElection(), getSelf());
+
           startElection msgg = msg;
           msgg.lastMassages.add(new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id));
           this.electionMassageCache = msg;
@@ -950,19 +955,23 @@ public class Node extends AbstractActor {
    
         }}
         else{
+
+        //   ///////////////simulating crash in middle of the election\\\\\\\\\\\\\\\\\\\\\
+
+        //  if(this.epoch == 1 && this.id ==5){
+        //   getContext().become(CrashedReceive());
+        //   getContext().stop(getSelf());
+        //   print("in stop");
+        // }
+
         this.electionMap.put(msg.issuer, msg);
         // this.electionIssuer = msg.issuer;
         // print("issuer"+this.electionIssuer +" -- "+ msg.issuer);
         getContext().become(electionReceive());
         print("send ack election"+msg.issuer);
         getSender().tell(new ackElection(), getSelf());
-        // if(this.id == 4){
-        //   return;
-        // }else{
-        //   startElection(this.id);
+        
 
-        // }
-        //add node last massage to the election and send it to others
         startElection msgg = msg;
         msgg.lastMassages.add(new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id));
         this.electionMassageCache = msg;
@@ -1236,7 +1245,7 @@ public class Node extends AbstractActor {
         this.voters.add(getSelf());
         this.SeqVoters.put(this.SeqNumber-1, this.voters);
         clientwriteResponse msgtoVote = this.workingMsg.get(2);
-        print("last msg is :"+msgtoVote);
+        // print("last msg is :"+msgtoVote);
 
         //prepare voting mechanism
         coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msgtoVote.value,
@@ -1307,6 +1316,7 @@ public class Node extends AbstractActor {
         getContext().become(createReceiveparticipants());
         // print("My index is : "+this.id);
         this.id = this.Nodes.indexOf(getSelf());
+        this.nextNodeId = this.id;
         // print("My index was : "+this.id);
 
       // }
