@@ -2,28 +2,20 @@ package ds1;
 
 import akka.actor.ActorRef;
 import akka.actor.AbstractActor;
-import akka.actor.ActorPath;
-import akka.actor.ActorSystem;
 import akka.actor.Cancellable;
 import akka.actor.Props;
-import akka.dispatch.sysmsg.Terminate;
-import ds1.DistributedSystemElc;
 import ds1.DistributedSystemElc.*;
-
 import ds1.DistributedSystemElc.StartMessage;
 import ds1.DistributedSystemElc.clientReadRequest;
 import ds1.DistributedSystemElc.clientReadResponse;
 import ds1.DistributedSystemElc.clientwriteRequest;
 import ds1.DistributedSystemElc.clientwriteResponse;
-
-import scala.collection.Seq;
+import scala.PartialFunction.OrElse;
 import scala.concurrent.duration.Duration;
 
+import java.io.InputStream;
 import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
-
-import javax.swing.GrayFilter;
-
 import java.util.Set;
 import java.util.*;
 import java.util.HashSet;
@@ -32,53 +24,31 @@ import java.util.Map;
 import java.util.Random;
 import java.util.ArrayList;
 import java.lang.Thread;
-import java.util.Collections;
-
-import java.io.IOException;
-
 
 public class Node extends AbstractActor {
 
     protected int id;                           // node ID
-    protected int nextNodeId;                   //election node node ID
+    protected int nextNodeId;                   //next node to forward the message in election
     protected List<ActorRef> participants;      // list of participant nodes
     protected List<ActorRef> Nodes;             // list of all nodes
     protected List<ActorRef> Clients;           //list of Clients
     protected ActorRef Coordinator;             // coordinator
 
-    protected Boolean Ping;                     //toHeartBeat check
-
-
-    protected Boolean isElection;               //on Election
-    protected Boolean electionAck;              //on Election ack received
+    protected Boolean Ping;                     //HeartBeat check
+    protected Boolean isElection;               //check if participant is on Election
+    protected Boolean electionAck;              //if ack is received after forwarding msg in election
     protected Integer nextNodeIdE;              //next node to send election
     protected int electionIssuer;               // node ID of election issuer
 
-
-
-
-
-
-
-    protected Set<coordinatorVoteReq> VoteReq;// for concurrent write req
-    protected Set<clientwriteResponse> finalizedMsg;// finished voted massages
-
-    public enum Decision {hold,abort,commit};     //store msg for vote based on seq number
-    protected Map<Integer, Decision> DecSeq;
-    protected Map<Integer,Map<Integer, Set<clientwriteResponse>>> LastOfUs;
-
-    protected Map<Integer,Integer> EpochSeqPair;
-    protected Map<Map<Integer,Integer>,clientwriteResponse> EpochSeqMassage;
-    protected Map<Map<Integer,Integer>,Set<ActorRef>> EpochSeqVoters;
+    protected Set<coordinatorVoteReq> VoteReq;      // for concurrent write req
+    protected Set<clientwriteResponse> finalizedMsg;// finished voted massages. Keep history of all commited msg
 
     //Important ones 
-    protected Map<Integer, clientwriteResponse> workingMsg; //for saveing vote req and response
-    protected Map<Integer, clientwriteResponse> finallizedMsg; //for saveing final result
-    protected Set<ActorRef> voters;             // keep voters
-    protected Map<Integer,Set<ActorRef>> SeqVoters;
-
-    // protected insideNode lm;
-    protected startElection electionMassageCache;
+    protected Map<Integer, clientwriteResponse> workingMsg;     //for saving vote req and response temporary
+    protected Map<Integer, clientwriteResponse> finallizedMsg;  //for saving final result
+    protected Set<ActorRef> voters;                             // keep voters in temporary set
+    protected Map<Integer,Set<ActorRef>> SeqVoters;             //map between the voting set and sequence number
+    
 
     //list all schedulers
     protected List<Cancellable> schedules;
@@ -86,17 +56,12 @@ public class Node extends AbstractActor {
 
     //put all election massages in map so keep track of them and make them seperate
     protected Map<Integer, startElection> electionMap;
-
-
-
-
-
-
+    protected startElection electionMassageCache;
 
     protected int Value;                        //Value of node
     protected int epoch;
     protected int SeqNumber;
-    protected Boolean isManager = false;
+    protected Boolean isManager = false;        // if node is coordinator we set this var to true
     private Random rnd = new Random();
 
     public Node(int id,int Value,int epoch, int SeqNumber,Boolean isManager){
@@ -115,21 +80,11 @@ public class Node extends AbstractActor {
         this.workingMsg = new HashMap<>();
         this.finallizedMsg = new HashMap<>();
 
-        this.DecSeq = new HashMap<>();
         this.SeqVoters = new HashMap<>();
-        this.LastOfUs = new HashMap<>();
-
-        this.EpochSeqPair = new HashMap<>();
-        this.EpochSeqMassage = new HashMap<>();
-        this.EpochSeqVoters = new HashMap<>();
         this.voters = new HashSet<>();
         this.schedules = new ArrayList<>();
         this.schedulesMap = new HashMap<>();
         this.electionMap = new HashMap<>();
-
-
-
-
 
     }
 
@@ -143,6 +98,10 @@ public class Node extends AbstractActor {
     }
 
     ///////////////////////////////// General node behaviors \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+    // These are some method which is used by both coordinator and participants. For implementing coordinator and participants We used 
+    // Node class as general class for both of them and we change the behavior of the Node by akka become method to coordinator(receive) and 
+    //participant(receive).
 
     //Build node
     static public Props props(int a, int b, int c, int d,Boolean e) {
@@ -159,25 +118,23 @@ public class Node extends AbstractActor {
         try {Thread.sleep(d);} catch (Exception ignored) {}
       }
   
+    //Send message to all items in the list of the participants.
     void multicast(Serializable m) {
         for (ActorRef p: participants)
           p.tell(m, getSelf());
     }
 
+    // after building Nodes and clients we will receive the list of the participants and coordinator 
+    //This method will set these lists for starting the process
     void setGroup(StartMessage sm) {
         Nodes = new ArrayList<>();
         participants = new ArrayList<>();
         //add all node to list for future usage
         for (ActorRef b: sm.Nodes) {
-          // if (!b.equals(getSelf())) {
-  
-          //   // copying all participant refs except for self
-          //   this.Nodes.add(b);
-          // }
+
           this.Nodes.add(b);
           
         }
-        // this.nextNodeIdE = this.Nodes.indexOf(getSelf());
 
         // list of participants
         for (ActorRef b: sm.participants) {
@@ -190,27 +147,25 @@ public class Node extends AbstractActor {
 
         if(sm.coordinator == getSelf()){
             this.isManager = true;
-            //become coordinator receiver to do
         }
         this.Coordinator = sm.coordinator;
 
         
         print("starting with " + sm.Nodes.size() + " Node(s)");
     }
+
+    // This method is after electing new coordinator and when last msg is handled we need to clear all temporary variable 
+    // and reset the lists of participants and coordinator and change to normal behavior.
+
     void setGroupPostElection(postElection sm) {
       Nodes.clear();
       participants.clear();
       //add all node to list for future usage
       for (ActorRef b: sm.Nodes) {
-        // if (!b.equals(getSelf())) {
 
-        //   // copying all participant refs except for self
-        //   this.Nodes.add(b);
-        // }
         this.Nodes.add(b);
         
       }
-      // this.nextNodeIdE = this.Nodes.indexOf(getSelf());
 
       // list of participants
       for (ActorRef b: sm.participants) {
@@ -221,15 +176,13 @@ public class Node extends AbstractActor {
           }
         }
 
-      // if(sm.coordinator == getSelf()){
-      //     this.isManager = true;
-      //     //become coordinator receiver to do
-      // }
       this.Coordinator = sm.coordinator;
-
       
       print("starting with " + sm.Nodes.size() + " Node(s)");
   }
+
+
+  //////Timeouts
 
     // schedule a Timeout message in specified time
     void setTimeout(int time,String mode,int e,int s) {
@@ -325,6 +278,8 @@ public class Node extends AbstractActor {
     }
 
     ///////receiving functions
+    // this is general receive method for initializing the Node as coordinator or participant.
+    
       public void onStartMessage(StartMessage msg){
         setGroup(msg);
         if(this.isManager){
@@ -353,17 +308,20 @@ public class Node extends AbstractActor {
         
         }
 
-        ///after starting node they will start asking coordinator every 4200 sec to see if it is alive
+        ///after starting node they will start asking coordinator every 2 min to see if it is alive
+        //if not it will start election 
         public void startHeartBeat(){
           Cancellable heartBeat = 
             getContext().system().scheduler().scheduleWithFixedDelay(
-            Duration.create(200, TimeUnit.MILLISECONDS),  
-            Duration.create(30000, TimeUnit.MILLISECONDS),  
+            Duration.create(10000, TimeUnit.MILLISECONDS),  
+            Duration.create(120000, TimeUnit.MILLISECONDS),  
             getSelf(),
             new PingPongStartMassage(), // the message to send
             getContext().system().dispatcher(),
             getSelf()
             );
+
+            //adding timeout to the list of cancellable schedules
             this.schedules.add(heartBeat);
             this.schedulesMap.put("heartBeat",heartBeat);
 
@@ -373,6 +331,11 @@ public class Node extends AbstractActor {
 
     /////////////////Coordinator functions start here\\\\\\\\\\\\\\\\\\\\\
 
+    //This section belong to the coordinator behavior. Diffrent receive methods and timouts are used for seperating 
+    //coordinator from participants
+
+
+    //Normal receive without any crash
     public Receive createReceiveCoordinator() {
       return receiveBuilder()
         .match(nodewriteRequest.class, this::onWriteReqFromNode)
@@ -383,6 +346,7 @@ public class Node extends AbstractActor {
         .build();
     }
 
+    // Receive with crash type 1 and type 2 hardcoded inside
     public Receive createReceiveCoordinatorAndCrash() {
       return receiveBuilder()
         .match(nodewriteRequest.class, this::onWriteReqFromNodeandCrash)
@@ -392,6 +356,8 @@ public class Node extends AbstractActor {
         .matchAny(msg -> {})
         .build();
     }
+
+    // receive with totally crash behavior without responding to any msg
     public Receive coordinatorCrashed() {
       return receiveBuilder()
         .match(Timeout.class, this::onTimeout)
@@ -400,6 +366,7 @@ public class Node extends AbstractActor {
         .build();
     }
 
+    //receive after election when coordinator preparing for handling the last unfinished msg
     public Receive afterElectionCoordinator() {
       return receiveBuilder()
         .match(Timeout.class, this::onTimeout)
@@ -408,7 +375,9 @@ public class Node extends AbstractActor {
         .build();
     }
 
-    //after receiving write req prepare voting system
+    //after receiving write req prepare voting system. In this part coordinator will make new voting msg, put it in the working msg and assign sequence
+    //number to it. prepare voting response container and multicast voting.
+
     public void onWriteReqFromNode(nodewriteRequest msg){
       print("massage received in coordinator");
       this.SeqNumber +=1;
@@ -440,8 +409,13 @@ public class Node extends AbstractActor {
       setTimeout(7000, "voteRes",this.epoch, this.SeqNumber);
 
     }
+
     //////////CrashMode\\\\\\\\\\\
-    //after receiving write req prepare voting system
+
+    //This is the same as above except two crash type are hardcoded after epoch 1 and sequence number 4 and crash type2 
+    //after epoch 2 and sequence number 4. Crash type 1 is sending decision after voting to at least one participant. Crash type 2 is 
+    //cordinator crash before making decision
+
     public void onWriteReqFromNodeandCrash(nodewriteRequest msg){
       print("massage received in coordinator");
       this.SeqNumber +=1;
@@ -469,37 +443,33 @@ public class Node extends AbstractActor {
       msg.node);
       
       //////Crash on seq 4 and after sending commit to only one node\\\\\
-      if(this.epoch<=2 && this.SeqNumber == 2 && this.isElection ==false){
+      if(this.epoch<2 && this.SeqNumber == 2 && this.isElection ==false){
 
         // send only to one randomly and crash
-        // ActorRef randomNode = participants.get(rnd.nextInt(participants.size()-3));
-        // randomNode.tell(onVoteReqp, getSelf());
-
         multicast(onVoteReqp);
         print("voting started on coordinator with proposed value: "+msg.value);
         setTimeout(5000, "crashType1",onVoteReqp.epoch, onVoteReqp.seqNumber);
         getContext().become(coordinatorCrashed());
         
 
-      }else if(this.epoch==3 && this.SeqNumber == 2 && this.isElection ==false){
+      }else if(this.epoch==2 && this.SeqNumber == 2 && this.isElection ==false){
         multicast(onVoteReqp);
         print("voting started on coordinator with proposed value: "+msg.value);
         setTimeout(5000, "crashType2",onVoteReqp.epoch, onVoteReqp.seqNumber);
         getContext().become(coordinatorCrashed());
-      }
-      else {
+      }else if(this.epoch==3 && this.SeqNumber == 1){
+        print(" hit the enter to shut down the system");
+      }else {
 
-        print("befor multicast");
         multicast(onVoteReqp);
         print("voting started on coordinator with proposed value: "+msg.value);
         setTimeout(5000, "voteRes",onVoteReqp.epoch, onVoteReqp.seqNumber);
       }
       
-      // setTimeout(1000, "voteRes",this.epoch, this.SeqNumber);
-
     }
 
-    //collect all yes voted
+    //After multicast vote we will wait and collect vote response until timeout reaches. Each vote has unique sequence number and can be done
+    //concurrently. Here we just add voter to the sequence number. and later we will count the voters
     public void onVoteRes(coordinatorVoteRes2 msg){
       if(this.SeqVoters.get(msg.seqNumber) == null){
         //prepare voting array
@@ -512,17 +482,18 @@ public class Node extends AbstractActor {
       
     }
 
-    //when vote timeout received
+    //Coordinator timeout system. Timeouts are scheduling to send a message to self after a certain time. We defined different mode for 
+    //timeouts in different locations for instance after multicast vote or sending election message.
+
     public void onTimeout(Timeout msg) {
       
-
       switch(msg.mode){
         
           case("voteResAfterElection"):
-            // print("h11");
+
             if(this.SeqVoters.get(msg.seq).size()>3){
               print("Voting completed on election");
-              // send kill signal if vote not yet came
+              // send kill signal if vote not yet came. This will randomly kill some participants if they are false positive.
               killNotparticipatedNodes(this.SeqVoters.get(msg.seq));
               clientwriteResponse coordToclientRes = this.workingMsg.get(msg.seq);
       
@@ -543,7 +514,7 @@ public class Node extends AbstractActor {
               break;
       
             }else {
-              print("seq number : "+msg.seq+" is rejected :(");
+              print("seq number : "+msg.seq+" is rejected :( We need more thread to handle requests.");
               break;
             }
 
@@ -566,35 +537,25 @@ public class Node extends AbstractActor {
               break;
       
             }else {
-              print("seq number : "+msg.seq+" is rejected :(");
+              print("seq number : "+msg.seq+" is rejected :( We need more thread to handle requests.");
               break;
             }
 
                     
           case("crashType1"):
-          print("ls");
           //crash after sending commit to one node
           
             if(this.SeqVoters.get(msg.seq).size()>3){
-              print("Voting completed");
-              // clientwriteResponse coordToclientRes = this.workingMsg.get(msg.seq);
-              
-              //send commit massage to voters
+              print("Voting completed");              
+              //send commit massage to one voter randomly 
               coordinatorCommitRes2 commitresponse = new coordinatorCommitRes2(msg.seq);
               Iterator<ActorRef> it = this.SeqVoters.get(msg.seq).iterator();
               ActorRef netcommit = it.next();
               if(netcommit == this.Coordinator){ netcommit = it.next();}
-              print("commited node is : "+netcommit);
+              //print the name of the commited node
+              print("commited node in crash type 1 is : "+netcommit);
               netcommit.tell(commitresponse, getSelf());
               
-
-              // //finalize massage to keep record and setting value
-              // this.finallizedMsg.put(msg.seq, coordToclientRes);
-              // this.Value = coordToclientRes.value;
-              // this.SeqNumber = msg.seq;
-              
-              // //send back the reply to first node who sent the initial writing req
-              // coordToclientRes.node.tell(coordToclientRes, getSelf());
               break;
       
             }else {
@@ -604,29 +565,11 @@ public class Node extends AbstractActor {
 
         case("crashType2"):
           print("ls");
-          //crash after sending commit to one node
+          //crash after sending commit to no one
           
             if(this.SeqVoters.get(msg.seq).size()>3){
-              // print("Voting completed");
-              print("Coordinator failed to send commit to node and crashed");
-              // clientwriteResponse coordToclientRes = this.workingMsg.get(msg.seq);
+              print("Coordinator failed to send commit to node and crashed (Crash type 2)");
               
-              //send commit massage to voters
-              // coordinatorCommitRes2 commitresponse = new coordinatorCommitRes2(msg.seq);
-              // Iterator<ActorRef> it = this.SeqVoters.get(msg.seq).iterator();
-              // ActorRef netcommit = it.next();
-              // if(netcommit == this.Coordinator){ netcommit = it.next();}
-              // print("commited node is : "+netcommit);
-              // netcommit.tell(commitresponse, getSelf());
-              
-
-              // //finalize massage to keep record and setting value
-              // this.finallizedMsg.put(msg.seq, coordToclientRes);
-              // this.Value = coordToclientRes.value;
-              // this.SeqNumber = msg.seq;
-              
-              // //send back the reply to first node who sent the initial writing req
-              // coordToclientRes.node.tell(coordToclientRes, getSelf());
               break;
       
             }else {
@@ -637,20 +580,15 @@ public class Node extends AbstractActor {
         
     }
 
+
+    // If received a ping message send pong message 
     public void onPing(Ping msg){
       getSender().tell(new Pong(), getSelf());
     }
 
-
-    
-
-
-
-
-
-
-
     ////////////////////Participants functions start here\\\\\\\\\\\\\\\\\\\\\\
+
+    //This is a normal receive 
 
     public Receive createReceiveparticipants() {
         return receiveBuilder()
@@ -709,6 +647,7 @@ public class Node extends AbstractActor {
 
     }
 
+    //When participant receive read request from the client
     public void onClientReadReq(clientReadRequest msg){
         ActorRef sender = getSender();
         print("Read massage recieved from client"+sender);
@@ -721,18 +660,18 @@ public class Node extends AbstractActor {
         ActorRef sender = getSender();
         nodewriteRequest onWriteReqFromNode = new nodewriteRequest(msg.value, msg.client, msg.node);
         print("Im : "+getSelf()+"Write massage recieved from client : "+sender+" and value: "+msg.value+". Forwarded to coordinator.");
-        // System.out.println(this.Coordinator);
         this.Coordinator.tell(onWriteReqFromNode, getSelf());
+
     }
 
-    //coordinator ask for the vote
+    //coordinator ask for the vote and after random delay participant will response to the coordinator
     public void onVoteReqp(coordinatorVoteReq msg){
       //add random delay for each node
       int delayTime = this.rnd.nextInt(1000)+500;
       int randomTime = this.id*1000;
       delay(delayTime);
 
-      print("client vote answer is yes"+msg.seqNumber);
+      print("client vote answer is yes on sequence number : "+msg.seqNumber);
 
       //prepare send back the response to coordinator
       coordinatorVoteRes2 voteRes = new coordinatorVoteRes2(msg.seqNumber);
@@ -742,6 +681,7 @@ public class Node extends AbstractActor {
         msg.client,
         msg.node);
 
+        // keep voted message in workingMsg to if commit not received coordinator will handle this later
       this.workingMsg.put(msg.seqNumber, finalResult);
       getSender().tell(voteRes, getSelf());
 
@@ -758,21 +698,18 @@ public class Node extends AbstractActor {
    
       //if node receive massage which is not in the queue so its crashed :(
 
-      // if(this.workingMsg.get(msg.seqNumber) == null){
-      //   getContext().become(CrashedReceive());
-      // }else{
-        //tricky
         if(this.workingMsg.get(msg.seqNumber) == null){
-          print("what the fuck");
+          print("SomeThing not right. Akka is giving some false crash that we dont request.");
           print("msg --- :"+msg.seqNumber+"  "+" ,sender is: "+getSender());
-          // System.out.println(this.workingMsg.values());
-          // System.out.println(msg.toString());
           getContext().become(CrashedReceive());
           return;
 
         }
+        //cancel timout in case of commiting.
         this.schedulesMap.get("voteRes").cancel();
         this.schedulesMap.remove("voteRes");
+
+        // message is already in workingMsg so we get the message 
         this.Value = this.workingMsg.get(msg.seqNumber).value;
         this.SeqNumber = this.workingMsg.get(msg.seqNumber).seqNumber;
 
@@ -782,30 +719,19 @@ public class Node extends AbstractActor {
         //remove working massage; if coordinator timeout on commit res node will check working massage
         this.finallizedMsg.put(msg.seqNumber,coordToclientRes);
         this.workingMsg.remove(msg.seqNumber);
-        //cancel timout in case of commiting.
         
-      // }
       
     }
 
+
+    // Here we will handle different timouts based on the mode.
     public void onTimeouts(Timeout msg){
-      // if (!this.workingMsg.get(msg.seq)){
         switch(msg.mode){
           case("pingpong"):
             print("ping pong start election");
             break;
-          // case("voteRes"):
-          //   if(this.workingMsg.get(msg.seq) != null){
-          //     print("started election cause no commit reply on vote from coordinator.");
-          //     insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id);
-          //     startElection sEl = new startElection(lm);
-          //     this.electionMassageCache = sEl;
-          //     startElection(this.id,sEl);
-          //     break;
-          //   }else{
-          //     break;
-          //   }
-            case("voteRes"):
+         
+          case("voteRes"):
               print("started election cause no commit reply on vote from coordinator."+msg.seq);
               insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id);
               startElection sEl = new startElection(lm,this.id);
@@ -813,21 +739,9 @@ public class Node extends AbstractActor {
               this.electionIssuer = this.id;
               startElection(this.id,sEl);
               break;
-            // if(this.workingMsg.get(msg.seq) != null){
-            //   print("started election cause no commit reply on vote from coordinator.");
-            //   insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id);
-            //   startElection sEl = new startElection(lm);
-            //   this.electionMassageCache = sEl;
-            //   startElection(this.id,sEl);
-            //   break;
-            // }else{
-            //   break;
-            // }
             
           case("noAck"):
-            // if(this.electionAck){
-            //   print("ack received on time");
-            // }else{
+      
               print("start election with next node: "+getSender());
               if(this.electionMassageCache == null){
                 insideNode lmb = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id);
@@ -838,8 +752,6 @@ public class Node extends AbstractActor {
               this.nextNodeId +=1;
               startElection(this.nextNodeId,this.electionMassageCache);;
               break;
-            // }
-            //break;
         }
       
       
@@ -853,7 +765,7 @@ public class Node extends AbstractActor {
     }
 
     //This heartbeat function will send ping massage to coordinator and wait for pong
-    // if not receive in 6000 ms election will start 
+    // if not receive in 30 sec election will start 
     void onPingPongInit(PingPongStartMassage msg){
       if(!this.isManager){
         this.Ping =false;
@@ -863,7 +775,6 @@ public class Node extends AbstractActor {
     }
     public void onPong(Pong msg){
       this.Ping = true;
-      // print("server alive");
     }
     void onPongFail(PongFail msg){
       if(!this.Ping){
@@ -871,68 +782,73 @@ public class Node extends AbstractActor {
       }
     }
 
-    void onElection(startElection msg){
-      if(this.isElection){
-        print("Im on the elecetion");
-        this.electionMassageCache = msg;
-        print("election issuer is :"+this.electionIssuer+" -- in massage issuer is : "+msg.issuer);
-        //check if issuer is the same as before or its new election
-        if(this.electionIssuer == msg.issuer){
-          print("in lopp");
-          if(imCoordinator(msg, new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id), getSelf())){
-            print("Im coordinator, You are losers bitches" + msg.lastMassages.size());
-            reInit(msg);
+
+    //When we receive the election message first we will check if it is new or we are already in the election. if it is new we will send ack and 
+    //add last message to the list and send to the next node. 
+    //If we are already on the election 2 thing might happen if issuer is us so it means one circle is done we have to find the coordinator.
+    // if issuer is someone else we add our last msg to it and forward and send ack.
+    //if we receive a message and we are the issuer but we are not coordinator we forward until we reach the coordinator.
+    // winner is checked by the max seq number . if there is more than one participant with max seq we ive the coordinator to the node with max 
+    // id.
+    // void onElection(startElection msg){
+    //   //check if we are in the election or not
+    //   if(this.isElection){
+    //     print("Im on the elecetion");
+    //     this.electionMassageCache = msg;
+    //     print("election issuer is :"+this.electionIssuer+" -- in massage issuer is : "+msg.issuer);
+    //     //check if issuer is the same as before or its new election
+    //     if(this.electionIssuer == msg.issuer){
+    //       //check if Im coordinator. it means i have max seq number or max id
+    //       if(imCoordinator(msg, new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id), getSelf())){
+    //         print("Im coordinator: "+getSelf()+" You are losers");
+    //         //start sending new participant and coordinator list to remaining participants
+    //         reInit(msg);
             
-          }else{
-            print("Im loser so forward massage");
-            startElection msgg = msg;
-            startElection(this.id, msgg);
-          }
-        }else{
-          print("symply skipp");
-          //check if you are losser forward otherwise cancel
-          int seqMax = getMaxSeqNumber(msg.lastMassages);
-          if(this.SeqNumber<=seqMax ){
-            startElection msgg = msg;
-            startElection(this.id, msgg);
-          }
-          // print("send ack election");
-          // getSender().tell(new ackElection(), getSelf());
-          // startElection msgg = msg;
-          // msgg.lastMassages.add(new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id));
-          // this.electionMassageCache = msg;
-          // startElection(this.id,msgg);
-          
-        }
+    //       }else{
+    //         print("Im loser so forward massage");
+    //         startElection msgg = msg;
+    //         startElection(this.id, msgg);
+    //       }
+    //     }else{
+    //       //check if you are losser forward otherwise cancel
+    //       int seqMax = getMaxSeqNumber(msg.lastMassages);
+    //       if(this.SeqNumber<=seqMax ){
+    //         startElection msgg = msg;
+    //         startElection(this.id, msgg);
+    //       }
+
+    //     }
         
  
 
-      }else{
-        this.electionIssuer = msg.issuer;
-        print("issuer"+this.electionIssuer +" -- "+ msg.issuer);
-        getContext().become(electionReceive());
-        print("send ack election"+msg.issuer);
-        getSender().tell(new ackElection(), getSelf());
-        // if(this.id == 4){
-        //   return;
-        // }else{
-        //   startElection(this.id);
+    //   }else{
+    //     this.electionIssuer = msg.issuer;
+    //     // print("issuer"+this.electionIssuer +" -- "+ msg.issuer);
+    //     getContext().become(electionReceive());
+    //     print("send ack to previous node: "+getSender());
+    //     getSender().tell(new ackElection(), getSelf());
+    //     startElection msgg = msg;
+    //     msgg.lastMassages.add(new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id));
+    //     this.electionMassageCache = msg;
+    //     startElection(this.id,msgg);
+    //   }
+    // }
 
-        // }
-        //add node last massage to the election and send it to others
-        startElection msgg = msg;
-        msgg.lastMassages.add(new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id));
-        this.electionMassageCache = msg;
-        startElection(this.id,msgg);
-      }
-    }
+
+    //When we receive the election message first we will check if it is new or we are already in the election. if it is new we will send ack and 
+    //add last message to the list and send to the next node. 
+    //If we are already on the election 2 thing might happen if issuer is us so it means one circle is done we have to find the coordinator.
+    // if issuer is someone else we add our last msg to it and forward and send ack.
+    //if we receive a message and we are the issuer but we are not coordinator we forward until we reach the coordinator.
+    // winner is checked by the max seq number . if there is more than one participant with max seq we ive the coordinator to the node with max 
+    // id.
 
     void onElection2(startElection msg){
+      //check if we are in the election or not
       if(this.isElection){
-        print("Im on the elecetion");
-
+        print("Im on the elecetion: "+getSelf());
         if(this.electionMap.get(msg.issuer) == null){
-          print("another election");
+          print("another election received just forward");
           this.electionMap.put(msg.issuer, msg);
           getSender().tell(new ackElection(), getSelf());
 
@@ -944,7 +860,7 @@ public class Node extends AbstractActor {
 
           if(imCoordinator(msg, new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id), getSelf())){
 
-            print("Im coordinator, You are losers bitches" + msg.lastMassages.size());
+            print("Im coordinator, You are losers :) , Coordinator name:"+ getSelf());
             afterElection(msg);
             
           }else{
@@ -956,19 +872,10 @@ public class Node extends AbstractActor {
         }}
         else{
 
-        //   ///////////////simulating crash in middle of the election\\\\\\\\\\\\\\\\\\\\\
-
-        //  if(this.epoch == 1 && this.id ==5){
-        //   getContext().become(CrashedReceive());
-        //   getContext().stop(getSelf());
-        //   print("in stop");
-        // }
-
         this.electionMap.put(msg.issuer, msg);
-        // this.electionIssuer = msg.issuer;
-        // print("issuer"+this.electionIssuer +" -- "+ msg.issuer);
         getContext().become(electionReceive());
-        print("send ack election"+msg.issuer);
+
+        print("send ack election");
         getSender().tell(new ackElection(), getSelf());
         
 
@@ -979,6 +886,8 @@ public class Node extends AbstractActor {
         }
     }
 
+    // When participant receive ack from next node it will set electionAck to true and when time out reaches it will accept. otherwise send
+    // election msg to next node in the round
     void onAckElection(ackElection msg){
       print("ack recieved1");
       this.electionAck = true;
@@ -989,76 +898,19 @@ public class Node extends AbstractActor {
       
     }
 
-    // //coordinator will send this after 4200 milisec if not received election will hold
-    // void startElection(int id, startElection sEl) {
-
-    //   //remove coordinator from Nodes list cause it has been crashed
-    //   // this.Nodes.remove(this.Coordinator);
-
-    //   //Find the current index in Nodes and send the election massage to the next node in list
-    //   // int idd = this.Nodes.indexOf(getSelf());
-    //   // List<insideNode> listLm = new ArrayList<>();
-    //   // insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf());
-    //   // startElection sEl = new startElection(lm);
-
-    //   //Print all schedules to know wats going on
-    //   print("Schedules"+ this.schedulesMap);
-
-
-    //   //node goes into election receive mode
-    //   getContext().become(electionReceive());
-    //   this.isElection = true;
-    //   this.electionAck = false;
-    //   // this.electionIssuer = sEl.issuer;
-
-    //   if(id+1 >= this.Nodes.size()){
-
-    //     ActorRef nextNode = this.Nodes.get(1);
-    //     this.nextNodeId = 1;
-    //     nextNode.tell(sEl, getSelf());
-    //     setTimeout(1000, "noAck", this.epoch, this.SeqNumber);
-    //   }else{
-    //     //case that we reach end of array
-    //     ActorRef nextNode = this.Nodes.get(id+1);
-    //     // insideNode lm1 = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf());
-    //     // startElection sEl = new startElection(lm);
-    //     nextNode.tell(sEl, getSelf());
-    //     setTimeout(1000, "noAck", this.epoch, this.SeqNumber);
-
-    //   }
-    // }
-
-        //coordinator will send this after 4200 milisec if not received election will hold
+    // this will prepare the participant for election. It will change behavior to election receive and also send election to next node 
+  
         void startElection(int id, startElection sEl) {
-
-          //remove coordinator from Nodes list cause it has been crashed
-          // this.Nodes.remove(this.Coordinator);
-    
-          //Find the current index in Nodes and send the election massage to the next node in list
-          // int idd = this.Nodes.indexOf(getSelf());
-          // List<insideNode> listLm = new ArrayList<>();
-          // insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf());
-          // startElection sEl = new startElection(lm);
-    
-          //Print all schedules to know wats going on
-          print("Schedules"+ this.schedulesMap);
-    
     
           //node goes into election receive mode
           getContext().become(electionReceive());
           this.isElection = true;
           this.electionAck = false;
-          // this.electionIssuer = sEl.issuer;
     
           if(id > this.participants.size()){
-            ActorRef nextNode = this.participants.get(0);
-            // if(this.epoch!=1){
-            //    nextNode = this.participants.get(0);
-            // }else{
-            //    nextNode = this.participants.get(1);
-            // }
-            
 
+            ActorRef nextNode = this.participants.get(0);
+         
             this.nextNodeId = 1;
             nextNode.tell(sEl, getSelf());
             setTimeout(1000, "noAck", this.epoch, this.SeqNumber);
@@ -1106,19 +958,12 @@ public class Node extends AbstractActor {
         imWinner = false;
       }
       return imWinner;
- 
-
-      // if(maxSeq > lm.seqNumber){imWinner = false;}else if(maxSeq == lm.seqNumber && maxcount>1){
-      //   if(this.id <maxId){
-      //     imWinner =false;
-      //   }else{imWinner = true;}
-      // }
-
       
       }
 
+
+      //election msg contain last msg from all participants. This method will find the max sequence number among the all msgs
       int getMaxSeqNumber(List<insideNode> msg){
-        // msg.sort(Comparator.comparingInt(insideNode::getSeq));
         int maxSeq = 0;
         for(insideNode in: msg){
           if(in.seqNumber > maxSeq){
@@ -1128,6 +973,8 @@ public class Node extends AbstractActor {
         }
         return maxSeq;
       }
+
+      //election msg contain last msg from all participants. This method will find the max id number among the all participants.
 
       int getMaxid(List<insideNode> msg){
         // msg.sort(Comparator.comparingInt(insideNode::getSeq));
@@ -1139,6 +986,7 @@ public class Node extends AbstractActor {
         }
         return maxId;
       }
+      // This method will return how many of the participants have the max sequence number.
       int CountseqRepeated(List<insideNode> msg,int seqmax){
         int count =0;
         for(insideNode in: msg){
@@ -1151,33 +999,40 @@ public class Node extends AbstractActor {
 
 
 
-    void reInit(startElection msg){
+       // void reInit(startElection msg){
 
-      //prepare coodrinator
-      getContext().become(createReceiveCoordinatorAndCrash());
-      this.isManager = true;
-      this.isElection =false;
-      this.electionIssuer = 1000;
+    //   //prepare coodrinator
+    //   getContext().become(createReceiveCoordinatorAndCrash());
+    //   this.isManager = true;
+    //   this.isElection =false;
+    //   this.electionIssuer = 1000;
       
-      ActorRef coordE = getSelf();
-      List<ActorRef> participantsE = new ArrayList<>();
-      List<ActorRef> NodesE = new ArrayList<>();
-      for(insideNode in: msg.lastMassages){
+    //   ActorRef coordE = getSelf();
+    //   List<ActorRef> participantsE = new ArrayList<>();
+    //   List<ActorRef> NodesE = new ArrayList<>();
+    //   for(insideNode in: msg.lastMassages){
 
-        NodesE.add(in.node);
-        if(in.node != getSelf()){
-          participantsE.add(in.node);
-        }
-      }
+    //     NodesE.add(in.node);
+    //     if(in.node != getSelf()){
+    //       participantsE.add(in.node);
+    //     }
+    //   }
 
-      //Sent Init massage
-      StartMessage onStartMessage = new StartMessage(NodesE, participantsE, coordE);
-      for (ActorRef i : participantsE){
-        i.tell(onStartMessage, null);
-      // this.epoch+=1;
-    }
-    }
+    //   //Sent Init massage
+    //   StartMessage onStartMessage = new StartMessage(NodesE, participantsE, coordE);
+    //   for (ActorRef i : participantsE){
+    //     i.tell(onStartMessage, null);
+    //   // this.epoch+=1;
+    // }
+    // }
 
+
+    // This is after election when we know the coordinator and we want to tell other participants about new lists of participants and new coordinator
+    //So this method will change the behavior of the coordinator to normal with crash( crash type 2 and 1 ). Send lists to participants.
+    // this method will also take care of the last unfinished msg. Because coordinator is the Node with the last msg there is two possibility:
+    //If workingMsg is not empty it means we have msg which is undecided so we will vote again. if workingMsg is empty it means Coordinator already 
+    //decided about the msg and at least send it to one so we will send result to others.
+   
     void afterElection(startElection msg){
 
       //cancel all schedules 
@@ -1195,16 +1050,6 @@ public class Node extends AbstractActor {
       List<ActorRef> participantsE = new ArrayList<>();
       List<ActorRef> NodesE = new ArrayList<>();
 
-      // for(ActorRef in: Nodes){
-      //   if(msg.lastMassages.contains(in)){
-      //     NodesE.add(in);
-      //   }
-      //   if(msg.lastMassages.contains(in) && in!=getSelf()){
-      //     participantsE.add(in);
-      //   }
-        
-        
-      // }
       NodesE.add(getSelf());
       for(insideNode in: msg.lastMassages){
 
@@ -1217,7 +1062,7 @@ public class Node extends AbstractActor {
       }
      
       
-       //Sent Init massage
+       //Sent Init massage. this will change the behavior of the participant from election to normal.
        postElection postElect = new postElection(NodesE, participantsE, coordE);
        for (ActorRef i : participants){
          if(participantsE.contains(i) && i!= getSelf()){
@@ -1245,7 +1090,6 @@ public class Node extends AbstractActor {
         this.voters.add(getSelf());
         this.SeqVoters.put(this.SeqNumber-1, this.voters);
         clientwriteResponse msgtoVote = this.workingMsg.get(2);
-        // print("last msg is :"+msgtoVote);
 
         //prepare voting mechanism
         coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msgtoVote.value,
@@ -1277,6 +1121,8 @@ public class Node extends AbstractActor {
      
     }
 
+    // after receiving this it means we have to cancel all schedules and prepare for the handling of the last msg.
+    // We change the behavior to the AfterElectionReceive and wait for the last msg
     void onPostElection(postElection msg){
       //cancel all schedules 
       for(Cancellable cl: schedulesMap.values()){
@@ -1288,13 +1134,12 @@ public class Node extends AbstractActor {
       
     }
 
+    // base on the decision about the last msg when participant commit the final result it will reset all variables and scheduls and 
+    // change behavior to the normal one.
     public void oncommitAfterElection(coordinatorCommitRes2 msg){
    
       //if node receive massage which is not in the queue so its crashed :(
 
-      // if(this.workingMsg.get(msg.seqNumber) == null){
-      //   getContext().become(CrashedReceive());
-      // }else{
         //cancel timout in case of commiting.
         this.schedulesMap.get("voteRes").cancel();
         this.schedulesMap.remove("voteRes");

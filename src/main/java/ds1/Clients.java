@@ -1,43 +1,29 @@
 package ds1;
-
 import akka.actor.ActorRef;
 import akka.actor.AbstractActor;
-import akka.actor.ActorSystem;
 import akka.actor.Props;
-import ds1.DistributedSystemElc;
-import ds1.DistributedSystemElc.StartMessage;
 import ds1.DistributedSystemElc.clientStart;
 import ds1.DistributedSystemElc.clientReadRequest;
 import ds1.DistributedSystemElc.clientReadResponse;
 import ds1.DistributedSystemElc.clientwriteRequest;
 import ds1.DistributedSystemElc.clientwriteResponse;
-
-import scala.collection.Seq;
 import scala.concurrent.duration.Duration;
-
-import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
-import java.util.Set;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.ArrayList;
 import java.lang.Thread;
-import java.util.Collections;
-
-import java.io.IOException;
-
 
 
 public class Clients extends AbstractActor{
 
     protected int id;                           // node ID
-    protected ActorRef MyNode;             // list of all nodes
+    protected ActorRef MyNode;                  // For holding sequential consistancy we will only send read and write to one particular participant
     protected int Value;                        //Value of node
     protected int epoch;
     protected int SeqNumber;
     private Random rnd = new Random();
-    protected List<Integer> intervalss;
+    protected List<Integer> intervalss;         //for adding delay between requests
 
     public Clients(int id){
         this.id = id;
@@ -84,7 +70,7 @@ public class Clients extends AbstractActor{
         System.out.format("%2d: %s\n", id, s);
       }
 
-    // emulate a delay of d milliseconds
+    // emulate a delay of in milliseconds
     void delay(int d) {
         try {Thread.sleep(d);} catch (Exception ignored) {}
       }
@@ -105,7 +91,7 @@ public class Clients extends AbstractActor{
     public void readValueStart(){
 
         clientReadRequest onStartRead = new clientReadRequest();
-        int interval = rnd.nextInt(10)+5;
+        int interval = rnd.nextInt(20)+15;
 
         getContext().system().scheduler().scheduleOnce(Duration.create(5, TimeUnit.SECONDS), 
             getSelf(), 
@@ -114,11 +100,11 @@ public class Clients extends AbstractActor{
             getSelf());
     }
 
-//start send massage to self to satrting write process
+//start send massage to self to starting write process
     public void writeValueStart(){
 
         clientwriteRequest onStartwrite = new clientwriteRequest(10,getSelf(),this.MyNode);
-        getContext().system().scheduler().scheduleOnce(Duration.create(5, TimeUnit.SECONDS), 
+        getContext().system().scheduler().scheduleOnce(Duration.create(6, TimeUnit.SECONDS), 
             getSelf(), 
             onStartwrite, 
             getContext().system().dispatcher(), 
@@ -132,7 +118,7 @@ public class Clients extends AbstractActor{
 
     public void onStartRead(clientReadRequest msg){
 
-        int interval = rnd.nextInt(30)+5;
+        int interval = rnd.nextInt(30)+15;
         clientReadRequest onClientReadReq = new clientReadRequest();
         getContext().system().scheduler().scheduleWithFixedDelay(Duration.create(1, TimeUnit.SECONDS), 
             Duration.create(interval, TimeUnit.SECONDS), 
@@ -143,12 +129,12 @@ public class Clients extends AbstractActor{
 
     }
 
-    //receive write req from self to start th whole process and send write req to the node
+    //receive write req from self to start the whole process and send write req to the node
     public void onStartwrite(clientwriteRequest msg){
         int value = rnd.nextInt(1000)+10;
         // int interval = rnd.nextInt(30)+10;
         int interval = this.intervalss.get(this.id);
-        print("interval is : "+interval);
+        // print("interval is : "+interval);
 
         clientwriteRequest onClientwriteReq = new clientwriteRequest(value,getSelf(),this.MyNode);
         getContext().system().scheduler().scheduleWithFixedDelay(
@@ -158,19 +144,20 @@ public class Clients extends AbstractActor{
             onClientwriteReq, 
             getContext().system().dispatcher(), 
             getSelf());
-        print("massage sended to the node with value : "+ value);
+        print("Client: "+getSelf()+". Massage sended to the node with value : "+ value);
     }
+
 
     //printing the response of the node to the read request
     public void onClientReadRes(clientReadResponse msg){
-        print("client response received");
-        print("Value for node X "+"in <"+msg.epoch+" - "+msg.seqNumber+"> is "+msg.value);
+        print("client read response received");
+        print("Value for node "+getSender()+" in <"+msg.epoch+" - "+msg.seqNumber+"> is "+msg.value);
     }
 
     //printing the response of the node to the write request
     public void onClientWriteRes(clientwriteResponse msg){
         print("client write response received");
-        print("Value for node X "+"in <"+msg.epoch+" - "+msg.seqNumber+"> is "+msg.value);
+        print("Value for node "+getSender()+" in <"+msg.epoch+" - "+msg.seqNumber+"> is "+msg.value);
     }
     
     

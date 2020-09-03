@@ -1,69 +1,41 @@
 package ds1;
-
 import akka.actor.ActorRef;
-import akka.actor.AbstractActor;
 import akka.actor.ActorSystem;
-import akka.actor.Props;
-import scala.annotation.meta.field;
-import scala.concurrent.duration.Duration;
-
 import java.io.Serializable;
-import java.util.concurrent.TimeUnit;
-import java.util.Set;
-import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
-import java.lang.Thread;
 import java.util.Collections;
-
 import java.io.IOException;
-
-import ds1.Node;
-import ds1.Clients;
+import java.io.InputStream;
 
 
 public class DistributedSystemElc {
   //Some initial variable
 
-  public final static int N_PARTICIPANTS = 8;
-  public final static int N_client = 2;
+  public final static int N_PARTICIPANTS = 6;
+  public final static int N_client = 1;
 
 
-  public final static int DECISION_TIMEOUT = 2000;  // timeout for the decision, ms
   final static int InitValue = 1000;
   final static int epochValue = 0;
   final static int InitSeqNumber = 0;
-  final static int VOTE_TIMEOUT = 1000;      // timeout for the votes, ms
 
-  // Massages 
+  ///////////////Massages data structure ++++++++++++++
 
-  ///////////////new data structure ++++++++++++++
 
-  public static class coordinatorVoteReq2 implements Serializable {
-    final int value;          // value of the message to write
-    final int epoch;       // epoch in which the message belongs
-    final int seqNumber;   // sequence number of the message
-    final ActorRef client;
-    final ActorRef node;
-      public coordinatorVoteReq2(int v,int e,int seq,ActorRef cl,ActorRef nd){
-        this.value = v;
-        this.epoch = e;
-        this.seqNumber = seq;
-        this.client = cl;
-        this.node = nd;
-        }
-    }
-    //kill Node immidietly
+
+    //kill Node immidietly for simulating participant crash randomly
     public static class killNode implements Serializable {}
 
+    //Response of the vote from participants to coordinator. Participants just need to say yes or no.
     public static class coordinatorVoteRes2 implements Serializable {
-      final int seqNumber;   // sequence number of the message
+      final int seqNumber;  
         public coordinatorVoteRes2(int seq){
           this.seqNumber = seq;
           }
       }
 
-    //commit from coordinator
+    //commit from coordinator to participants
 
     public static class coordinatorCommitRes2 implements Serializable {
       final int seqNumber;   // sequence number of the message
@@ -72,7 +44,9 @@ public class DistributedSystemElc {
         }
       }
 
-  //for timeout
+  //for scheduling timeout. we need to know this schedule belong to which epoch and sequence number
+  //also by defining mode which is a string we can know this timeout belong to what part of the process
+  // for instance it is for voting or election or ... 
   public static class Timeout implements Serializable {
     public final int epoch;
     public final int seq;
@@ -84,28 +58,15 @@ public class DistributedSystemElc {
     }
 
   }
-  // Start message that sends the list of participants to everyone
+  // Start message that sends the list of participants to everyone in the begining of the code.
+  // WHen node receive this message it will use setgroup method to set all the list and init the process
   public static class StartMessage implements Serializable {
     
-    public final List<ActorRef> Nodes;      //list on all nodes
+    public final List<ActorRef> Nodes;           //list on all participants plus coordinator
     public final List<ActorRef> participants;   //list of participants
-    public final ActorRef coordinator;     //initial coordinator
+    public final ActorRef coordinator;          //initial coordinator
 
     public StartMessage(List<ActorRef> Nodes,List<ActorRef> participants,ActorRef coordinator) {
-      this.Nodes = Collections.unmodifiableList(new ArrayList<>(Nodes));
-      this.participants = Collections.unmodifiableList(new ArrayList<>(participants));
-      this.coordinator = coordinator;
-    }
-  }
-
-  // Start message that sends the list of participants to everyone
-  public static class postElection implements Serializable {
-    
-    public final List<ActorRef> Nodes;      //list on all nodes
-    public final List<ActorRef> participants;   //list of participants
-    public final ActorRef coordinator;     //initial coordinator
-
-    public postElection(List<ActorRef> Nodes,List<ActorRef> participants,ActorRef coordinator) {
       this.Nodes = Collections.unmodifiableList(new ArrayList<>(Nodes));
       this.participants = Collections.unmodifiableList(new ArrayList<>(participants));
       this.coordinator = coordinator;
@@ -123,21 +84,39 @@ public class DistributedSystemElc {
     }
   }
 
+  // After election new coordinator will send postelection message which contain the list of the remaning participants
+  // and new coordinator. 
+  public static class postElection implements Serializable {
+    
+    public final List<ActorRef> Nodes;      //list on all nodes
+    public final List<ActorRef> participants;   //list of participants
+    public final ActorRef coordinator;     //initial coordinator
+
+    public postElection(List<ActorRef> Nodes,List<ActorRef> participants,ActorRef coordinator) {
+      this.Nodes = Collections.unmodifiableList(new ArrayList<>(Nodes));
+      this.participants = Collections.unmodifiableList(new ArrayList<>(participants));
+      this.coordinator = coordinator;
+    }
+  }
+
+  
+
   //Read req massage. this will sent from client to local node and response is 
   //local value of the node.
 
   public static class clientReadRequest implements Serializable { }
   public static class clientReadResponse implements Serializable { 
     final int value;          // value of the message to write
-    final int epoch;       // epoch in which the message belongs
-    final int seqNumber;   // sequence number of the message
+    final int epoch;          // epoch in which the message belongs
+    final int seqNumber;      // sequence number of the message
     public clientReadResponse(int v,int e,int seq){
       this.value = v;
       this.epoch = e;
       this.seqNumber = seq;
     }
   }
-  //massage to write a value on node
+
+  //massage from client to participant to write a value.
   public static class clientwriteRequest implements Serializable {
     final int value;          // value of the message to write
     final ActorRef client;
@@ -149,7 +128,7 @@ public class DistributedSystemElc {
     }
    }
 
-   //response to write request from node to client
+   //response of the participant to client for write request
    public static class clientwriteResponse implements Serializable {
     final int value;          // value of the message to write
     final int epoch;       // epoch in which the message belongs
@@ -165,6 +144,7 @@ public class DistributedSystemElc {
         }
     }
 
+    // when participants receive the write request it will forward this message to coordinator
 
     public static class nodewriteRequest implements Serializable {
       final int value;          // value of the message to write
@@ -193,8 +173,10 @@ public class DistributedSystemElc {
           }
       }
 
-   //Voting start here
-   //
+   /////////Voting start here
+   //Coordinator send vote request to the participants. this vote also contain the value,sequence number, epoch 
+   // participant who forward the message, and the client. participant will keep this message in temp set and wait
+   // for the commit response
 
    public static class coordinatorVoteReq implements Serializable {
     final int value;          // value of the message to write
@@ -211,38 +193,6 @@ public class DistributedSystemElc {
         }
     }
 
-    public static class coordinatorVoteRes implements Serializable {
-      final int value;          // value of the message to write
-      final int epoch;       // epoch in which the message belongs
-      final int seqNumber;   // sequence number of the message
-      final ActorRef client;
-      final ActorRef node;
-        public coordinatorVoteRes(int v,int e,int seq,ActorRef cl,ActorRef nd){
-          this.value = v;
-          this.epoch = e;
-          this.seqNumber = seq;
-          this.client = cl;
-          this.node = nd;
-          }
-      }
-
-    //commit from coordinator
-
-    public static class coordinatorCommitRes implements Serializable {
-      final int value;          // value of the message to write
-      final int epoch;       // epoch in which the message belongs
-      final int seqNumber;   // sequence number of the message
-      final ActorRef client;
-      final ActorRef node;
-        public coordinatorCommitRes(int v,int e,int seq,ActorRef cl,ActorRef nd){
-          this.value = v;
-          this.epoch = e;
-          this.seqNumber = seq;
-          this.client = cl;
-          this.node = nd;
-          }
-      }
-
 
     //to start heartbeat
     public static class Ping implements Serializable { }
@@ -251,9 +201,23 @@ public class DistributedSystemElc {
 
     public static class PingPongStartMassage implements Serializable { }
 
-    //starting election
+    //////////////////starting election
+    //each participant will add the last message to the startElection message and send to next one. Thiss message also
+    //keep track of the issuer of the election for concurrency
 
+    public static class startElection implements Serializable {
+   
+      final List<insideNode> lastMassages = new ArrayList<>();
+      final Integer issuer;
+      public startElection(insideNode lm, Integer id){
+          this.lastMassages.add(lm);
+          this.issuer = id;
+        }
+     }
 
+     //is the structure of the last message for each participant
+     //startElection will hold the list of these last message which will select the coordinator based on
+     // the max sequence number or max ID
     public static class insideNode implements Serializable {
       final int value;          // value of the message to write
       final int epoch;       // epoch in which the message belongs
@@ -275,15 +239,8 @@ public class DistributedSystemElc {
           return this.id;
         }
      }
-     public static class startElection implements Serializable {
-   
-      final List<insideNode> lastMassages = new ArrayList<>();
-      final Integer issuer;
-      public startElection(insideNode lm, Integer id){
-          this.lastMassages.add(lm);
-          this.issuer = id;
-        }
-     }
+  
+     //sending acknowledgement to previous participant 
      public static class ackElection implements Serializable {}
 
 
@@ -316,33 +273,37 @@ public class DistributedSystemElc {
     // Create the coordinator
     ActorRef coordinator = system.actorOf(Node.props(0, InitValue, epochValue, InitSeqNumber,true), "coordinator");
     
-    //merge all in nodes
+    //merge participants and coordinator in nodes list
     List<ActorRef> Nodes = new ArrayList<>();
     Nodes.add(coordinator);
     for (ActorRef i : participants){
       Nodes.add(i);
     }
 
-    //Sent Init massage
+    //Sent Init massage 
     StartMessage onStartMessage = new StartMessage(Nodes, participants, coordinator);
     for (ActorRef i : Nodes){
       i.tell(onStartMessage, null);
     }
 
-    //for starting clients
+    //for starting clients and read and write process
     clientStart onStartClient = new clientStart(Nodes);
     for (ActorRef i : Clientss){
       i.tell(onStartClient, null);
     }
 
+    inputContinue();
 
-   
-
-    try {
-      System.out.println(">>> Press ENTER to exit <<<");
-      System.in.read();
-    } 
-    catch (IOException ignored) {}
     system.terminate();
+
+    
+}
+
+public static void inputContinue() {
+  try {
+    System.out.println(">>> Press ENTER to continue <<<");
+    System.in.read();
   }
+  catch (IOException ignored) {}
+}
 }
