@@ -283,8 +283,8 @@ public class Node extends AbstractActor {
       public void onStartMessage(StartMessage msg){
         setGroup(msg);
         if(this.isManager){
-            getContext().become(createReceiveCoordinatorAndCrash());
-            // getContext().become(createReceiveCoordinatorPingPongCrash());
+            // getContext().become(createReceiveCoordinatorAndCrash());
+            getContext().become(createReceiveCoordinatorPingPongCrash());
 
             this.epoch+=1;
             if(!schedulesMap.isEmpty()){
@@ -305,7 +305,7 @@ public class Node extends AbstractActor {
             }
           }
           resetVars();
-          // startHeartBeat();
+          startHeartBeat();
         }
         
         }
@@ -313,7 +313,7 @@ public class Node extends AbstractActor {
         ///after starting node they will start asking coordinator every 2 min to see if it is alive
         //if not it will start election 
         public void startHeartBeat(){
-          int time = rnd.nextInt(10)*10+5000;
+          int time =this.id*30+5000;
           Cancellable heartBeat = 
             getContext().system().scheduler().scheduleWithFixedDelay(
             Duration.create(10000, TimeUnit.MILLISECONDS),  
@@ -1103,7 +1103,7 @@ public class Node extends AbstractActor {
       }
 
       //prepare coodrinator
-      getContext().become(createReceiveCoordinatorAndCrash());
+      getContext().become(createReceiveCoordinator());
       this.isManager = true;
       this.isElection =false;
       this.electionIssuer = 1000;
@@ -1123,6 +1123,8 @@ public class Node extends AbstractActor {
         }
       }
      
+
+      
       
        //Sent Init massage. this will change the behavior of the participant from election to normal.
        postElection postElect = new postElection(NodesE, participantsE, coordE);
@@ -1132,6 +1134,9 @@ public class Node extends AbstractActor {
           print("told : "+i);
          }
          
+        }
+        for(Cancellable cl: schedulesMap.values()){
+          cl.cancel();
         }
 
         this.Nodes.clear();
@@ -1193,6 +1198,7 @@ public class Node extends AbstractActor {
 
       getContext().become(AfterElectionReceive());
       setGroupPostElection(msg);
+
       
     }
 
@@ -1203,19 +1209,20 @@ public class Node extends AbstractActor {
       //if node receive massage which is not in the queue so its crashed :(
 
         //cancel timout in case of commiting.
-        this.schedulesMap.get("voteRes").cancel();
-        this.schedulesMap.remove("voteRes");
+        // this.schedulesMap.get("voteRes").cancel();
+        // this.schedulesMap.remove("voteRes");
 
-        this.Value = this.workingMsg.get(msg.seqNumber).value;
-        this.SeqNumber = this.workingMsg.get(msg.seqNumber).seqNumber;
+        // this.Value = this.workingMsg.get(msg.seqNumber).value;
+        // this.SeqNumber = this.workingMsg.get(msg.seqNumber).seqNumber;
 
         //keep record of the fixed decision with pair of seq and massage
-        clientwriteResponse coordToclientRes = this.workingMsg.get(msg.seqNumber);
+        // clientwriteResponse coordToclientRes = this.workingMsg.get(msg.seqNumber);
 
         //remove working massage; if coordinator timeout on commit res node will check working massage
-        this.finallizedMsg.put(msg.seqNumber,coordToclientRes);
+        // this.finallizedMsg.put(msg.seqNumber,coordToclientRes);
         this.workingMsg.clear();
-        
+        // this.schedulesMap.get("heartBeat").cancel();
+
         resetVars();
         this.epoch +=1;
         this.SeqNumber =1;
