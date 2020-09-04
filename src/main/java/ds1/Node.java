@@ -284,6 +284,8 @@ public class Node extends AbstractActor {
         setGroup(msg);
         if(this.isManager){
             getContext().become(createReceiveCoordinatorAndCrash());
+            // getContext().become(createReceiveCoordinatorPingPongCrash());
+
             this.epoch+=1;
             if(!schedulesMap.isEmpty()){
               for(Cancellable cl: schedulesMap.values()){
@@ -311,10 +313,11 @@ public class Node extends AbstractActor {
         ///after starting node they will start asking coordinator every 2 min to see if it is alive
         //if not it will start election 
         public void startHeartBeat(){
+          int time = rnd.nextInt(10)*10+5000;
           Cancellable heartBeat = 
             getContext().system().scheduler().scheduleWithFixedDelay(
             Duration.create(10000, TimeUnit.MILLISECONDS),  
-            Duration.create(120000, TimeUnit.MILLISECONDS),  
+            Duration.create(time, TimeUnit.MILLISECONDS),  
             getSelf(),
             new PingPongStartMassage(), // the message to send
             getContext().system().dispatcher(),
@@ -350,6 +353,17 @@ public class Node extends AbstractActor {
     public Receive createReceiveCoordinatorAndCrash() {
       return receiveBuilder()
         .match(nodewriteRequest.class, this::onWriteReqFromNodeandCrash)
+        .match(coordinatorVoteRes2.class, this::onVoteRes)
+        .match(Timeout.class, this::onTimeout)
+        .match(Ping.class, this::onPing)
+        .matchAny(msg -> {})
+        .build();
+    }
+
+    // Receive with crash on pingPong hardcoded inside
+    public Receive createReceiveCoordinatorPingPongCrash() {
+      return receiveBuilder()
+        .match(nodewriteRequest.class, this::onWriteReqFromNodePingCrash)
         .match(coordinatorVoteRes2.class, this::onVoteRes)
         .match(Timeout.class, this::onTimeout)
         .match(Ping.class, this::onPing)
@@ -459,6 +473,49 @@ public class Node extends AbstractActor {
         getContext().become(coordinatorCrashed());
       }else if(this.epoch==3 && this.SeqNumber == 1){
         print(" hit the enter to shut down the system");
+      }else {
+
+        multicast(onVoteReqp);
+        print("voting started on coordinator with proposed value: "+msg.value);
+        setTimeout(5000, "voteRes",onVoteReqp.epoch, onVoteReqp.seqNumber);
+      }
+      
+    }
+
+
+    public void onWriteReqFromNodePingCrash(nodewriteRequest msg){
+      print("massage received in coordinator");
+      this.SeqNumber +=1;
+
+      //prepare final massage to send:)
+      clientwriteResponse coordinatorToNodeFinalRes = new clientwriteResponse(msg.value,
+      this.epoch,
+      this.SeqNumber,
+      msg.client,
+      msg.node);
+
+      //add massage to wotking massage
+      this.workingMsg.put(this.SeqNumber, coordinatorToNodeFinalRes);
+
+      //prepare voting array
+      this.voters.clear();
+      this.voters.add(getSelf());
+      this.SeqVoters.put(this.SeqNumber, this.voters);
+
+      //prepare voting mechanism
+      coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msg.value,
+      coordinatorToNodeFinalRes.epoch,
+      coordinatorToNodeFinalRes.seqNumber,
+      msg.client,
+      msg.node);
+      
+      //////Crash on seq 4 and after sending commit to only one node\\\\\
+      if(this.epoch<2 && this.SeqNumber == 4 && this.isElection ==false){
+
+        // send only to one randomly and crash
+        print("coordinator Crashed FOr heartbeat signal :))");
+        getContext().become(coordinatorCrashed());
+
       }else {
 
         multicast(onVoteReqp);
@@ -779,6 +836,11 @@ public class Node extends AbstractActor {
     void onPongFail(PongFail msg){
       if(!this.Ping){
         print("ping failed start election");
+
+        insideNode lm = new insideNode(this.Value, this.epoch, this.SeqNumber, getSelf(),this.id);
+        startElection sEl = new startElection(lm,this.id);
+        delay(rnd.nextInt(10)*10+1000);
+        startElection(this.id, sEl);
       }
     }
 

@@ -40,7 +40,7 @@ public class Clients extends AbstractActor{
 
 
         //Send massage to self to start process
-        // readValueStart();
+        readValueStart();
         writeValueStart();
 
     }
