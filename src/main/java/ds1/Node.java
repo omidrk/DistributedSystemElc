@@ -283,7 +283,7 @@ public class Node extends AbstractActor {
       public void onStartMessage(StartMessage msg){
         setGroup(msg);
         if(this.isManager){
-            getContext().become(createReceiveCoordinatorAndCrash());
+            getContext().become(createReceiveCoordinator());
             this.epoch+=1;
             if(!schedulesMap.isEmpty()){
               for(Cancellable cl: schedulesMap.values()){
@@ -406,8 +406,7 @@ public class Node extends AbstractActor {
       // multicast vote and wait for response after 1 sec
       multicast(onVoteReqp);
       print("voting started on coordinator with proposed value: "+msg.value);
-      setTimeout(7000, "voteRes",this.epoch, this.SeqNumber);
-
+      setTimeout(5000, "voteRes",onVoteReqp.epoch, onVoteReqp.seqNumber);
     }
 
     //////////CrashMode\\\\\\\\\\\
