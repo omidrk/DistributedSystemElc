@@ -313,10 +313,10 @@ public class Node extends AbstractActor {
         ///after starting node they will start asking coordinator every 2 min to see if it is alive
         //if not it will start election 
         public void startHeartBeat(){
-          int time =this.id*30+5000;
+          int time =this.id*3000+10000;
           Cancellable heartBeat = 
             getContext().system().scheduler().scheduleWithFixedDelay(
-            Duration.create(10000, TimeUnit.MILLISECONDS),  
+            Duration.create(time, TimeUnit.MILLISECONDS),  
             Duration.create(time, TimeUnit.MILLISECONDS),  
             getSelf(),
             new PingPongStartMassage(), // the message to send
@@ -832,6 +832,7 @@ public class Node extends AbstractActor {
     }
     public void onPong(Pong msg){
       this.Ping = true;
+      // this.schedulesMap.get("heartBeat").cancel();
     }
     void onPongFail(PongFail msg){
       if(!this.Ping){
@@ -1149,27 +1150,27 @@ public class Node extends AbstractActor {
 
       //if there is any msg in workingmsg so it means that we need to vote again on that msg cause 
       //coordinator crashed before sending the last msg
-      if(!this.workingMsg.isEmpty()){
-        //start voting
-        //prepare voting array
-        this.voters.clear();
-        this.SeqVoters.clear();
-        this.voters.add(getSelf());
-        this.SeqVoters.put(this.SeqNumber-1, this.voters);
-        clientwriteResponse msgtoVote = this.workingMsg.get(2);
+      // if(!this.workingMsg.isEmpty()){
+      //   //start voting
+      //   //prepare voting array
+      //   this.voters.clear();
+      //   this.SeqVoters.clear();
+      //   this.voters.add(getSelf());
+      //   this.SeqVoters.put(this.SeqNumber-1, this.voters);
+      //   clientwriteResponse msgtoVote = this.workingMsg.get(2);
 
-        //prepare voting mechanism
-        coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msgtoVote.value,
-        msgtoVote.epoch,
-        msgtoVote.seqNumber,
-        msgtoVote.client,
-        msgtoVote.node);
-        // multicast vote and wait for response for 7 sec
-        multicast(onVoteReqp);
-        print("voting again started on coordinator with proposed value: "+msgtoVote.value);
-        setTimeout(7000, "voteResAfterElection",msgtoVote.epoch, msgtoVote.seqNumber);
+      //   //prepare voting mechanism
+      //   coordinatorVoteReq onVoteReqp  = new coordinatorVoteReq(msgtoVote.value,
+      //   msgtoVote.epoch,
+      //   msgtoVote.seqNumber,
+      //   msgtoVote.client,
+      //   msgtoVote.node);
+      //   // multicast vote and wait for response for 7 sec
+      //   multicast(onVoteReqp);
+      //   print("voting again started on coordinator with proposed value: "+msgtoVote.value);
+      //   setTimeout(7000, "voteResAfterElection",msgtoVote.epoch, msgtoVote.seqNumber);
 
-      }else{
+      // }else{
         //send the last fixed value to nodes
         clientwriteResponse msgtoVote = this.finallizedMsg.get(2);
 
@@ -1183,7 +1184,7 @@ public class Node extends AbstractActor {
         this.SeqNumber = 0;
         this.epoch +=1;
         this.id = 0;
-      }
+      // }
 
      
     }
@@ -1221,7 +1222,7 @@ public class Node extends AbstractActor {
         //remove working massage; if coordinator timeout on commit res node will check working massage
         // this.finallizedMsg.put(msg.seqNumber,coordToclientRes);
         this.workingMsg.clear();
-        // this.schedulesMap.get("heartBeat").cancel();
+        this.Ping = true;
 
         resetVars();
         this.epoch +=1;
